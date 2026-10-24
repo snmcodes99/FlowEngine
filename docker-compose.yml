@@ -1,0 +1,73 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: eventflow-mongo
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "try { rs.status().ok } catch (e) { rs.initiate(); }"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  redis:
+    image: redis:7-alpine
+    container_name: eventflow-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build: .
+    container_name: eventflow-api
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+      - MONGO_URI=mongodb://mongodb:27017/eventflow?replicaSet=rs0
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - API_KEY=
+      - MAX_PAYLOAD_SIZE_KB=1024
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  consumer:
+    build: .
+    container_name: eventflow-consumer
+    command: ["npm", "run", "consumer"]
+    environment:
+      - EVENTFLOW_SERVER_URL=http://api:3000
+      - MONGO_URI=mongodb://mongodb:27017/eventflow?replicaSet=rs0
+      - CONSUMER_GROUP=payment-worker-1
+      - CONSUMER_STREAM=payment.authorized
+      - CONSUMER_POLL_INTERVAL_MS=2000
+      - CONSUMER_BATCH_SIZE=50
+      - MAX_RETRY_ATTEMPTS=3
+    depends_on:
+      api:
+        condition: service_started
+      mongodb:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  mongo_data:
+  redis_data:
